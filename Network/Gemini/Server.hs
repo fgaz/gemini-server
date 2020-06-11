@@ -20,7 +20,9 @@ import Data.String (fromString)
 
 import Control.Exception (SomeException, try)
 
-import System.IO (hPutStrLn, stderr)
+import System.Log.Logger
+  ( updateGlobalLogger, setLevel, Priority(INFO)
+  , infoM, errorM )
 
 --MAYBE switch to a more modern/efficient uri library
 --TODO add client cert
@@ -41,27 +43,38 @@ renderHeader status meta =
   fromString "\CR\LF"
 
 runServer :: Maybe HostName -> ServiceName -> (Request -> IO Response) -> IO ()
-runServer host service handler = runTCPServer host service talk -- MAYBE server config
+runServer host service handler = do
+  updateGlobalLogger "Network.Gemini.Server" $ setLevel INFO
+  runTCPServer host service talk -- MAYBE server config
   where
     talk s = do --TODO timeouts on send and receive (and maybe on handler)
       msg <- toString <$> recv s 1025 -- 1024 + CR or LF
       -- It makes sense to be very lenient here
       let mURI = parseURI $ takeWhile (not . (`elem` ['\CR', '\LF'])) msg
-      -- TODO some logging
       case mURI of
         Nothing -> do
+          infoM "Network.Gemini.Server" $ show msg <> " 59"
           sendAll s $ renderHeader 59 $ fromString "Invalid URL"
           close s
         Just uri@(URI "gemini:" _ _ _ _) -> do
           response <- try $ handler uri
           case response of
             Right (Response status meta body) -> do
+              infoM "Network.Gemini.Server" $ unwords
+                                            [ show uri
+                                            , show status
+                                            , show meta ]
               sendAll s $ renderHeader status meta
               sendAll s body
             Left e -> do
-              hPutStrLn stderr $ "[ERROR]: " <> show (e :: SomeException)
+              errorM "Network.Gemini.Server" $ unwords
+                                             [ show uri
+                                             , "42"
+                                             -- double show to escape the string
+                                             , show $ show (e :: SomeException) ]
               sendAll s $ renderHeader 42 $ fromString "Internal server error"
-        Just (URI scheme _ _ _ _) ->
+        Just uri@(URI scheme _ _ _ _) -> do
+              infoM "Network.Gemini.Server" $ show uri <> " 59"
               sendAll s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
 
 -- | Shorthand for @Response 20 "text/gemini"@
