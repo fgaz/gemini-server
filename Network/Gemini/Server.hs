@@ -8,7 +8,7 @@ module Network.Gemini.Server (
 , redirect
 ) where
 
-import Network.Socket (HostName, ServiceName, close)
+import Network.Socket (HostName, ServiceName)
 import Network.Socket.ByteString.Lazy (recv, sendAll)
 import Network.Run.TCP (runTCPServer)
 import Network.URI (URI(URI), parseURI, uriToString)
@@ -55,7 +55,6 @@ runServer host service handler = do
         Nothing -> do
           infoM "Network.Gemini.Server" $ show msg <> " 59"
           sendAll s $ renderHeader 59 $ fromString "Invalid URL"
-          close s
         Just uri@(URI "gemini:" _ _ _ _) -> do
           response <- try $ handler uri
           case response of
