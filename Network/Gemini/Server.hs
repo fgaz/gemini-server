@@ -72,7 +72,7 @@ runServer host service handler = do
 logRequest :: Priority -> SockAddr -> Either String URI -> Int -> Maybe String -> IO ()
 logRequest p peer uri code meta = logM "Network.Gemini.Server" p $ unwords
   [ show peer
-  , either id show uri
+  , either show show uri
   , show code
   , maybe "-" show meta ]
 
