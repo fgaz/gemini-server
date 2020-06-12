@@ -8,7 +8,7 @@ module Network.Gemini.Server (
 , redirect
 ) where
 
-import Network.Socket (HostName, ServiceName)
+import Network.Socket (HostName, ServiceName, getPeerName)
 import Network.Socket.ByteString.Lazy (recv, sendAll)
 import Network.Run.TCP (runTCPServer)
 import Network.URI (URI(URI), parseURI, uriToString)
@@ -51,29 +51,38 @@ runServer host service handler = do
       msg <- toString <$> recv s 1025 -- 1024 + CR or LF
       -- It makes sense to be very lenient here
       let mURI = parseURI $ takeWhile (not . (`elem` ['\CR', '\LF'])) msg
+      peer <- getPeerName s
       case mURI of
         Nothing -> do
-          infoM "Network.Gemini.Server" $ show msg <> " 59"
+          infoM "Network.Gemini.Server" $ unwords
+                                        [ show peer
+                                        , show msg
+                                        , "59" ]
           sendAll s $ renderHeader 59 $ fromString "Invalid URL"
         Just uri@(URI "gemini:" _ _ _ _) -> do
           response <- try $ handler uri
           case response of
             Right (Response status meta body) -> do
               infoM "Network.Gemini.Server" $ unwords
-                                            [ show uri
+                                            [ show peer
+                                            , show uri
                                             , show status
                                             , show meta ]
               sendAll s $ renderHeader status meta
               sendAll s body
             Left e -> do
               errorM "Network.Gemini.Server" $ unwords
-                                             [ show uri
+                                             [ show peer
+                                             , show uri
                                              , "42"
                                              -- double show to escape the string
                                              , show $ show (e :: SomeException) ]
               sendAll s $ renderHeader 42 $ fromString "Internal server error"
         Just uri@(URI scheme _ _ _ _) -> do
-              infoM "Network.Gemini.Server" $ show uri <> " 59"
+              infoM "Network.Gemini.Server" $ unwords
+                                            [ show peer
+                                            , show uri
+                                            , "59" ]
               sendAll s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
 
 -- | Shorthand for @Response 20 "text/gemini"@
