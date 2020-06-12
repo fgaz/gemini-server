@@ -8,7 +8,7 @@ module Network.Gemini.Server (
 , redirect
 ) where
 
-import Network.Socket (HostName, ServiceName, getPeerName)
+import Network.Socket (HostName, ServiceName, SockAddr, getPeerName)
 import Network.Socket.ByteString.Lazy (recv, sendAll)
 import Network.Run.TCP (runTCPServer)
 import Network.URI (URI(URI), parseURI, uriToString)
@@ -21,8 +21,7 @@ import Data.String (fromString)
 import Control.Exception (SomeException, try)
 
 import System.Log.Logger
-  ( updateGlobalLogger, setLevel, Priority(INFO)
-  , infoM, errorM )
+  ( updateGlobalLogger, setLevel, logM, Priority(INFO, ERROR) )
 
 --MAYBE switch to a more modern/efficient uri library
 --TODO add client cert
@@ -54,36 +53,28 @@ runServer host service handler = do
       peer <- getPeerName s
       case mURI of
         Nothing -> do
-          infoM "Network.Gemini.Server" $ unwords
-                                        [ show peer
-                                        , show msg
-                                        , "59" ]
+          logRequest INFO peer (Left msg) 59 Nothing
           sendAll s $ renderHeader 59 $ fromString "Invalid URL"
         Just uri@(URI "gemini:" _ _ _ _) -> do
           response <- try $ handler uri
           case response of
             Right (Response status meta body) -> do
-              infoM "Network.Gemini.Server" $ unwords
-                                            [ show peer
-                                            , show uri
-                                            , show status
-                                            , show meta ]
+              logRequest INFO peer (Right uri) status $ Just meta
               sendAll s $ renderHeader status meta
               sendAll s body
             Left e -> do
-              errorM "Network.Gemini.Server" $ unwords
-                                             [ show peer
-                                             , show uri
-                                             , "42"
-                                             -- double show to escape the string
-                                             , show $ show (e :: SomeException) ]
+              logRequest ERROR peer (Right uri) 42 $ Just $ show (e :: SomeException)
               sendAll s $ renderHeader 42 $ fromString "Internal server error"
         Just uri@(URI scheme _ _ _ _) -> do
-              infoM "Network.Gemini.Server" $ unwords
-                                            [ show peer
-                                            , show uri
-                                            , "59" ]
+              logRequest INFO peer (Right uri) 59 Nothing
               sendAll s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
+
+logRequest :: Priority -> SockAddr -> Either String URI -> Int -> Maybe String -> IO ()
+logRequest p peer uri code meta = logM "Network.Gemini.Server" p $ unwords
+  [ show peer
+  , either id show uri
+  , show code
+  , maybe "-" show meta ]
 
 -- | Shorthand for @Response 20 "text/gemini"@
 okGemini :: LBS.ByteString -> Response
