@@ -17,5 +17,6 @@ tasks:
     cd gemini-server
     cabal update
     cabal build
+    cabal haddock
     cabal test
 
