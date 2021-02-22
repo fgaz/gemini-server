@@ -1,7 +1,7 @@
 cabal-version:       2.2
 
 name:                gemini-server
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            A lightweight server for the Gemini protocol
 description:
   This package contains a server for the
@@ -36,4 +36,3 @@ library
                      , HsOpenSSL ^>=0.11.5.1
   ghc-options:         -Wall
   default-language:    Haskell2010
-
