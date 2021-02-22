@@ -54,6 +54,18 @@ runServer :: Maybe HostName
 runServer host service cert handler = withOpenSSL $ do
   updateGlobalLogger "Network.Gemini.Server" $ setLevel INFO
   -- MAYBE server config
+  sslCtx <- setupSSL cert
+  runTCPServer host service $ \sock -> do
+    peer <- getPeerName sock
+    catch -- the ssl session may fail
+      (bracket
+        (acceptSSL sslCtx sock)
+        (`SSL.shutdown` SSL.Unidirectional)
+        (talk handler peer))
+      (\e -> logM "Network.Gemini.Server" ERROR $ show (e :: SomeException))
+
+setupSSL :: FilePath -> IO SSL.SSLContext
+setupSSL cert = do
   sslCtx <- SSL.context
   SSL.contextSetDefaultCiphers sslCtx
   SSL.contextSetCertificateFile sslCtx cert
@@ -62,44 +74,37 @@ runServer host service cert handler = withOpenSSL $ do
     -- Accept all certificates, since we don't really care about validity wrt CAs
     -- but only about the public key
     Just $ \_ _ -> pure True
-  runTCPServer host service $ runSSLServer sslCtx
-  where
-    runSSLServer :: SSL.SSLContext -> Socket -> IO ()
-    runSSLServer sslCtx sock = catch -- the ssl session may fail
-      (bracket
-        (acceptSSL sslCtx sock)
-        (\(_, ssl) -> SSL.shutdown ssl SSL.Unidirectional)
-        (uncurry talk))
-      (\e -> logM "Network.Gemini.Server" ERROR $ show (e :: SomeException))
-    acceptSSL :: SSL.SSLContext -> Socket -> IO (SockAddr, SSL)
-    acceptSSL sslCtx sock = do
-      peer <- getPeerName sock
-      ssl <- SSL.connection sslCtx sock
-      SSL.accept ssl
-      pure (peer, ssl)
-    talk :: SockAddr -> SSL -> IO ()
-    talk peer s = do --TODO timeouts on send and receive (and maybe on handler)
-      msg <- toString <$> SSL.read s 1025 -- 1024 + CR or LF
-      -- It makes sense to be very lenient here
-      let mURI = parseURI $ takeWhile (not . (`elem` ['\CR', '\LF'])) msg
-      case mURI of
-        Nothing -> do
-          logRequest INFO peer (Left msg) 59 Nothing
-          SSL.lazyWrite s $ renderHeader 59 $ fromString "Invalid URL"
-        Just uri@(URI "gemini:" _ _ _ _) -> do
-          clientCert <- SSL.getPeerCertificate s
-          response <- try $ handler $ Request uri clientCert
-          case response of
-            Right (Response status meta body) -> do
-              logRequest INFO peer (Right uri) status $ Just meta
-              SSL.lazyWrite s $ renderHeader status meta
-              SSL.lazyWrite s body
-            Left e -> do
-              logRequest ERROR peer (Right uri) 42 $ Just $ show (e :: SomeException)
-              SSL.lazyWrite s $ renderHeader 42 $ fromString "Internal server error"
-        Just uri@(URI scheme _ _ _ _) -> do
-              logRequest INFO peer (Right uri) 59 Nothing
-              SSL.lazyWrite s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
+  pure sslCtx
+
+acceptSSL :: SSL.SSLContext -> Socket -> IO SSL
+acceptSSL sslCtx sock = do
+  ssl <- SSL.connection sslCtx sock
+  SSL.accept ssl
+  pure ssl
+
+talk :: (Request -> IO Response) -> SockAddr -> SSL -> IO ()
+talk handler peer s = do --TODO timeouts on send and receive (and maybe on handler)
+  msg <- toString <$> SSL.read s 1025 -- 1024 + CR or LF
+  -- It makes sense to be very lenient here
+  let mURI = parseURI $ takeWhile (not . (`elem` ['\CR', '\LF'])) msg
+  case mURI of
+    Nothing -> do
+      logRequest INFO peer (Left msg) 59 Nothing
+      SSL.lazyWrite s $ renderHeader 59 $ fromString "Invalid URL"
+    Just uri@(URI "gemini:" _ _ _ _) -> do
+      clientCert <- SSL.getPeerCertificate s
+      response <- try $ handler $ Request uri clientCert
+      case response of
+        Right (Response status meta body) -> do
+          logRequest INFO peer (Right uri) status $ Just meta
+          SSL.lazyWrite s $ renderHeader status meta
+          SSL.lazyWrite s body
+        Left e -> do
+          logRequest ERROR peer (Right uri) 42 $ Just $ show (e :: SomeException)
+          SSL.lazyWrite s $ renderHeader 42 $ fromString "Internal server error"
+    Just uri@(URI scheme _ _ _ _) -> do
+          logRequest INFO peer (Right uri) 59 Nothing
+          SSL.lazyWrite s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
 
 logRequest :: Priority -> SockAddr -> Either String URI -> Int -> Maybe String -> IO ()
 logRequest p peer uri code meta = logM "Network.Gemini.Server" p $ unwords
@@ -118,4 +123,3 @@ okPlain = Response 20 $ fromString "text/plain"
 
 redirect :: URI -> Response
 redirect uri = Response 30 (uriToString id uri "") mempty
-
