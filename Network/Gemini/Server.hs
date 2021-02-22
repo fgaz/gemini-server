@@ -28,15 +28,26 @@ import System.Log.Logger
 
 
 --MAYBE switch to a more modern/efficient uri library
+
+-- | A Gemini client's request
+--
+-- @since 0.2.0.0
 data Request = Request
   { requestURI :: URI
   , requestCert :: Maybe X509 }
 
+-- | A Gemini server's response
+--
+-- @since 0.1.0.0
 data Response = Response
   { responseStatus :: Int
   , responseMeta :: String
   , responseBody :: LBS.ByteString }
 
+-- | A request handler specifies how the server should respond to the clients'
+-- requests
+--
+-- @since 0.1.0.0
 type Handler = Request -> IO Response
 
 renderHeader :: Int -> String -> LBS.ByteString
@@ -46,6 +57,9 @@ renderHeader status meta =
   fromString meta <>
   fromString "\CR\LF"
 
+-- | Start a Gemini server.
+--
+-- @since 0.2.0.0
 runServer :: Maybe HostName
           -> ServiceName
           -> FilePath -- ^ Path to the server certificate
@@ -114,12 +128,19 @@ logRequest p peer uri code meta = logM "Network.Gemini.Server" p $ unwords
   , maybe "-" show meta ]
 
 -- | Shorthand for @Response 20 "text/gemini"@
+--
+-- @since 0.1.0.0
 okGemini :: LBS.ByteString -> Response
 okGemini = Response 20 $ fromString "text/gemini"
 
 -- | Shorthand for @Response 20 "text/plain"@
+--
+-- @since 0.1.0.0
 okPlain :: LBS.ByteString -> Response
 okPlain = Response 20 $ fromString "text/plain"
 
+-- | Shorthand for @Response 30 uri@
+--
+-- @since 0.1.0.0
 redirect :: URI -> Response
 redirect uri = Response 30 (uriToString id uri "") mempty
