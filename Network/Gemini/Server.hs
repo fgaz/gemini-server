@@ -1,5 +1,5 @@
 module Network.Gemini.Server (
-  Request
+  Request(..)
 , Response(..)
 , Handler
 , runServer
@@ -8,24 +8,29 @@ module Network.Gemini.Server (
 , redirect
 ) where
 
-import Network.Socket (HostName, ServiceName, SockAddr, getPeerName)
-import Network.Socket.ByteString.Lazy (recv, sendAll)
+import Network.Socket (Socket, HostName, ServiceName, SockAddr, getPeerName)
+import OpenSSL (withOpenSSL)
+import qualified OpenSSL.Session as SSL
+import OpenSSL.Session (SSL)
+import OpenSSL.X509 (X509)
 import Network.Run.TCP (runTCPServer)
 import Network.URI (URI(URI), parseURI, uriToString)
 
 import qualified Data.ByteString.Lazy as LBS
-import Data.ByteString.Lazy.UTF8 (toString)
+import Data.ByteString.UTF8 (toString)
 
 import Data.String (fromString)
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, try, bracket, catch)
 
 import System.Log.Logger
   ( updateGlobalLogger, setLevel, logM, Priority(INFO, ERROR) )
 
+
 --MAYBE switch to a more modern/efficient uri library
---TODO add client cert
-type Request = URI
+data Request = Request
+  { requestURI :: URI
+  , requestCert :: Maybe X509 }
 
 data Response = Response
   { responseStatus :: Int
@@ -41,33 +46,60 @@ renderHeader status meta =
   fromString meta <>
   fromString "\CR\LF"
 
-runServer :: Maybe HostName -> ServiceName -> (Request -> IO Response) -> IO ()
-runServer host service handler = do
+runServer :: Maybe HostName
+          -> ServiceName
+          -> FilePath -- ^ Path to the server certificate
+          -> (Request -> IO Response) -- ^ Request handler
+          -> IO ()
+runServer host service cert handler = withOpenSSL $ do
   updateGlobalLogger "Network.Gemini.Server" $ setLevel INFO
-  runTCPServer host service talk -- MAYBE server config
+  -- MAYBE server config
+  sslCtx <- SSL.context
+  SSL.contextSetDefaultCiphers sslCtx
+  SSL.contextSetCertificateFile sslCtx cert
+  SSL.contextSetPrivateKeyFile sslCtx cert
+  SSL.contextSetVerificationMode sslCtx $ SSL.VerifyPeer False True $
+    -- Accept all certificates, since we don't really care about validity wrt CAs
+    -- but only about the public key
+    Just $ \_ _ -> pure True
+  runTCPServer host service $ runSSLServer sslCtx
   where
-    talk s = do --TODO timeouts on send and receive (and maybe on handler)
-      msg <- toString <$> recv s 1025 -- 1024 + CR or LF
+    runSSLServer :: SSL.SSLContext -> Socket -> IO ()
+    runSSLServer sslCtx sock = catch -- the ssl session may fail
+      (bracket
+        (acceptSSL sslCtx sock)
+        (\(_, ssl) -> SSL.shutdown ssl SSL.Unidirectional)
+        (uncurry talk))
+      (\e -> logM "Network.Gemini.Server" ERROR $ show (e :: SomeException))
+    acceptSSL :: SSL.SSLContext -> Socket -> IO (SockAddr, SSL)
+    acceptSSL sslCtx sock = do
+      peer <- getPeerName sock
+      ssl <- SSL.connection sslCtx sock
+      SSL.accept ssl
+      pure (peer, ssl)
+    talk :: SockAddr -> SSL -> IO ()
+    talk peer s = do --TODO timeouts on send and receive (and maybe on handler)
+      msg <- toString <$> SSL.read s 1025 -- 1024 + CR or LF
       -- It makes sense to be very lenient here
       let mURI = parseURI $ takeWhile (not . (`elem` ['\CR', '\LF'])) msg
-      peer <- getPeerName s
       case mURI of
         Nothing -> do
           logRequest INFO peer (Left msg) 59 Nothing
-          sendAll s $ renderHeader 59 $ fromString "Invalid URL"
+          SSL.lazyWrite s $ renderHeader 59 $ fromString "Invalid URL"
         Just uri@(URI "gemini:" _ _ _ _) -> do
-          response <- try $ handler uri
+          clientCert <- SSL.getPeerCertificate s
+          response <- try $ handler $ Request uri clientCert
           case response of
             Right (Response status meta body) -> do
               logRequest INFO peer (Right uri) status $ Just meta
-              sendAll s $ renderHeader status meta
-              sendAll s body
+              SSL.lazyWrite s $ renderHeader status meta
+              SSL.lazyWrite s body
             Left e -> do
               logRequest ERROR peer (Right uri) 42 $ Just $ show (e :: SomeException)
-              sendAll s $ renderHeader 42 $ fromString "Internal server error"
+              SSL.lazyWrite s $ renderHeader 42 $ fromString "Internal server error"
         Just uri@(URI scheme _ _ _ _) -> do
               logRequest INFO peer (Right uri) 59 Nothing
-              sendAll s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
+              SSL.lazyWrite s $ renderHeader 59 $ fromString $ "Invalid scheme: " <> scheme
 
 logRequest :: Priority -> SockAddr -> Either String URI -> Int -> Maybe String -> IO ()
 logRequest p peer uri code meta = logM "Network.Gemini.Server" p $ unwords
