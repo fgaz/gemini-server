@@ -63,12 +63,13 @@ renderHeader status meta =
 runServer :: Maybe HostName
           -> ServiceName
           -> FilePath -- ^ Path to the server certificate
+          -> FilePath -- ^ Path to the private key
           -> (Request -> IO Response) -- ^ Request handler
           -> IO ()
-runServer host service cert handler = withOpenSSL $ do
+runServer host service cert key handler = withOpenSSL $ do
   updateGlobalLogger "Network.Gemini.Server" $ setLevel INFO
   -- MAYBE server config
-  sslCtx <- setupSSL cert
+  sslCtx <- setupSSL cert key
   runTCPServer host service $ \sock -> do
     peer <- getPeerName sock
     catch -- the ssl session may fail
@@ -78,12 +79,12 @@ runServer host service cert handler = withOpenSSL $ do
         (talk handler peer))
       (\e -> logM "Network.Gemini.Server" ERROR $ show (e :: SomeException))
 
-setupSSL :: FilePath -> IO SSL.SSLContext
-setupSSL cert = do
+setupSSL :: FilePath -> FilePath -> IO SSL.SSLContext
+setupSSL cert key = do
   sslCtx <- SSL.context
   SSL.contextSetDefaultCiphers sslCtx
   SSL.contextSetCertificateFile sslCtx cert
-  SSL.contextSetPrivateKeyFile sslCtx cert
+  SSL.contextSetPrivateKeyFile sslCtx key
   SSL.contextSetVerificationMode sslCtx $ SSL.VerifyPeer False True $
     -- Accept all certificates, since we don't really care about validity wrt CAs
     -- but only about the public key
