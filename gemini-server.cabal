@@ -1,7 +1,7 @@
 cabal-version:       2.2
 
 name:                gemini-server
-version:             0.2.0.0
+version:             0.3.0.0
 synopsis:            A lightweight server for the Gemini protocol
 description:
   This package contains a server for the
