@@ -89,6 +89,7 @@ setupSSL cert key = do
     -- Accept all certificates, since we don't really care about validity wrt CAs
     -- but only about the public key
     Just $ \_ _ -> pure True
+  SSL.contextSetSessionIdContext sslCtx $ fromString "gemini-server"
   pure sslCtx
 
 acceptSSL :: SSL.SSLContext -> Socket -> IO SSL
